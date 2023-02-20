@@ -1,7 +1,13 @@
 #include <GLAD/glad.h>
 #include <GLFW/glfw3.h>
+#include <math.h>
 
 #include <iostream>
+
+#include "Shader.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 
 /* TYPEDEFS */
 
@@ -27,31 +33,22 @@ uint VBO;  //? VBO - Vertex Buffer Object
 uint VAO;  //? VAO - Vertex Array Object
 uint EBO;  //? EBO - Element Buffer Object
 
-uint shaderProgram;
-
 /* CONSTANTS */
-
-const char* vertexShaderSource =
-    "#version 330 core\n"
-    "layout (location = 0) in vec3 aPos;\n"
-    "void main()\n"
-    "{\n"
-    " gl_Position = vec4(aPos.x, aPos.y, aPos.z, 1.0);\n"
-    "}\0";
-
-const char* fragmentShaderSource =
-    "#version 330 core\n"
-    "out vec4 FragColor;\n"
-    "void main()\n"
-    "{\n"
-    "FragColor = vec4(1.0f, 0.5f, 0.2f, 1.0f);\n"
-    "}\n";
 
 const float triangle_vertices[] = {-0.5f, -0.5f, 0.0f, 0.5f, -0.5f,
                                    0.0f,  0.0f,  0.5f, 0.0f};
 
+const float triangle_vertices_w_colour[] = {
+    0.5f, -0.5f, 0.0f, 1.0f, 0.0f, 0.0f, -0.5f, -0.5f, 0.0f,
+    0.0f, 1.0f,  0.0f, 0.0f, 0.5f, 0.0f, 0.0f,  0.0f,  1.0f};
+
 const float rectangle_vertices[] = {0.5f,  0.5f,  0.0f, 0.5f,  -0.5f, 0.0f,
                                     -0.5f, -0.5f, 0.0f, -0.5f, 0.5f,  0.0f};
+
+const float rectangle_vertices_w_tex[] = {
+    0.5f, 0.5f, 0.0f,  1.0f, 0.0f, 0.0f,  1.0f,  1.0f, 0.5f, -0.5f, 0.0f,
+    0.0f, 1.0f, 0.0f,  1.0f, 0.0f, -0.5f, -0.5f, 0.0f, 0.0f, 0.0f,  1.0f,
+    0.0f, 0.0f, -0.5f, 0.5f, 0.0f, 1.0f,  1.0f,  0.0f, 0.0f, 1.0f};
 
 const uint rectangle_indices[] = {0, 1, 3, 1, 2, 3};
 
@@ -59,10 +56,8 @@ const uint rectangle_indices[] = {0, 1, 3, 1, 2, 3};
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void processInput(GLFWwindow* window);
-bool verifyShaderCompile(uint shader);
-bool verifyProgramCompile(uint program);
 
-int main() {
+int main(int argc, const char* argv[]) {
   props = WindowProps();
 
   glfwInit();
@@ -89,34 +84,6 @@ int main() {
   glViewport(0, 0, props.width, props.height);
   glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
-  uint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-  glShaderSource(vertexShader, 1, &vertexShaderSource, NULL);
-  glCompileShader(vertexShader);
-
-  if (!verifyShaderCompile(vertexShader)) {
-    glDeleteShader(vertexShader);
-    return -1;
-  }
-
-  uint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-  glShaderSource(fragmentShader, 1, &fragmentShaderSource, NULL);
-  glCompileShader(fragmentShader);
-
-  if (!verifyShaderCompile(fragmentShader)) {
-    glDeleteShader(fragmentShader);
-    return -1;
-  }
-
-  shaderProgram = glCreateProgram();
-  glAttachShader(shaderProgram, vertexShader);
-  glAttachShader(shaderProgram, fragmentShader);
-  glLinkProgram(shaderProgram);
-
-  glDeleteShader(vertexShader);
-  glDeleteShader(fragmentShader);
-
-  if (!verifyProgramCompile(shaderProgram)) return -1;
-
   glGenVertexArrays(1, &VAO);
   glBindVertexArray(VAO);
 
@@ -124,20 +91,83 @@ int main() {
   glBindBuffer(GL_ARRAY_BUFFER, VBO);
 
   if (props.render == Render::TRIANGLE)
-    glBufferData(GL_ARRAY_BUFFER, sizeof(triangle_vertices), triangle_vertices,
-                 GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(triangle_vertices_w_colour),
+                 triangle_vertices_w_colour, GL_STATIC_DRAW);
 
   if (props.render == Render::RECTANGLE)
-    glBufferData(GL_ARRAY_BUFFER, sizeof(rectangle_vertices),
-                 rectangle_vertices, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(rectangle_vertices_w_tex),
+                 rectangle_vertices_w_tex, GL_STATIC_DRAW);
 
   glGenBuffers(1, &EBO);
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
   glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(rectangle_indices),
                rectangle_indices, GL_STATIC_DRAW);
 
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
   glEnableVertexAttribArray(0);
+
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+                        (void*)(3 * sizeof(float)));
+  glEnableVertexAttribArray(1);
+
+  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+                        (void*)(6 * sizeof(float)));
+  glEnableVertexAttribArray(2);
+
+  uint texture1, texture2;
+
+  unsigned char* data;
+  int width, height, nrChannels;
+
+  glGenTextures(1, &texture1);
+  glBindTexture(GL_TEXTURE_2D, texture1);
+
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+  data = stbi_load("./textures/brick-tex.jpg", &width, &height, &nrChannels, 0);
+
+  if (data) {
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB,
+                 GL_UNSIGNED_BYTE, data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+  } else {
+    std::cout << "Failed to load texture \n";
+  }
+
+  stbi_image_free(data);
+
+  glGenTextures(1, &texture2);
+  glBindTexture(GL_TEXTURE_2D, texture2);
+
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+  stbi_set_flip_vertically_on_load(true);
+  data = stbi_load("./textures/meme-tex.png", &width, &height, &nrChannels,
+                   STBI_rgb_alpha);
+
+  if (data) {
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+  } else {
+    std::cout << "Failed to load texture \n";
+  }
+
+  stbi_image_free(data);
+
+  Shader shader("./shaders/tex_vertex.vs", "./shaders/multi_tex_fragment.fs");
+
+  shader.use();
+  shader.setInt("tex1", 0);
+  shader.setInt("tex2", 1);
 
   while (!glfwWindowShouldClose(window)) {
     processInput(window);
@@ -145,10 +175,21 @@ int main() {
     glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    glUseProgram(shaderProgram);
+    float time = glfwGetTime();
+    float offsetX = std::sin(time);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture1);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, texture2);
+
+    shader.use();
+
     glBindVertexArray(VAO);
 
-    if (props.render == Render::TRIANGLE) glDrawArrays(GL_TRIANGLES, 0, 3);
+    if (props.render == Render::TRIANGLE) {
+      glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
 
     if (props.render == Render::RECTANGLE) {
       glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
@@ -160,6 +201,10 @@ int main() {
     glfwSwapBuffers(window);
     glfwPollEvents();
   }
+
+  glDeleteVertexArrays(1, &VAO);
+  glDeleteBuffers(1, &VBO);
+  glDeleteBuffers(1, &EBO);
 
   glfwTerminate();
   return 0;
@@ -177,34 +222,4 @@ void processInput(GLFWwindow* window) {
   if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
     glfwSetWindowShouldClose(window, true);
   }
-}
-
-bool verifyShaderCompile(uint shader) {
-  int success;
-  char infoLog[512];
-  glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-
-  if (!success) {
-    glGetShaderInfoLog(shader, 512, NULL, infoLog);
-    std::cout << "ERROR: Shader Failed To Compile: " << infoLog << '\n';
-
-    return false;
-  }
-
-  return true;
-}
-
-bool verifyProgramCompile(uint program) {
-  int success;
-  char infoLog[512];
-  glGetProgramiv(program, GL_LINK_STATUS, &success);
-
-  if (!success) {
-    glGetProgramInfoLog(program, 512, NULL, infoLog);
-    std::cout << "ERROR: Program Failed To Compile: " << infoLog << '\n';
-
-    return false;
-  }
-
-  return true;
 }
